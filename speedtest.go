@@ -20,7 +20,7 @@ const (
 )
 
 func main() {
-	// speedtestCmd := exec.Command("speedtest", "-p", "no")
+	// speedtestCmd := exec.Command(speedtestExecutable, "-p", "no")
 	// out, err := speedtestCmd.CombinedOutput()
 	// if err != nil {
 	// 	log.Fatal(err)
@@ -36,15 +36,27 @@ Download:   103.41 Mbps (data used: 99.3 MB )
 Packet Loss:     0.0%
 Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 `
-	fmt.Printf("%s\n", out)
+	// fmt.Printf("%s\n", out)
 	parse_speedtest_result(out)
 
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
+
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
 		panic(err)
 	}
-	defer db.Close()
+
+	result, err := db.Exec("create table if not exists $1;", "measurement") // TODO: Use correct Postgres syntax!
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%s\n", result)
+
+	// defer db.Close()
+	err = db.Close()
+	if err != nil {
+		panic(err)
+	}
 }
 
 // returns server, latency, download, upload, and packet loss from the given speedtest output string
