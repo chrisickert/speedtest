@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -12,14 +13,19 @@ import (
 const speedtestExecutable = "speedtest"
 
 const (
-	host     = "localhost"
-	port     = 5432
-	user     = "speedtest"
-	password = "<read-from-env>"
-	dbname   = "speedtest"
+	host      = "localhost"
+	port      = 5432
+	user      = "speedtest"
+	password  = "speedtest"
+	dbname    = "speedtest"
+	tableName = "measurement"
 )
 
 func main() {
+	db := connectToDatabase()
+
+	measuredAt := time.Now()
+
 	// speedtestCmd := exec.Command(speedtestExecutable, "-p", "no")
 	// out, err := speedtestCmd.CombinedOutput()
 	// if err != nil {
@@ -36,31 +42,43 @@ Download:   103.41 Mbps (data used: 99.3 MB )
 Packet Loss:     0.0%
 Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 `
-	// fmt.Printf("%s\n", out)
-	parse_speedtest_result(out)
+	server, latency, download, upload, packetLoss := parseSpeedtestResult(out)
 
+	writeToDatabase(db, measuredAt, server, latency, download, upload, packetLoss)
+
+	err := db.Close()
+	handleError(err)
+}
+
+// connects to the database and creates the measurement table if it does not exist yet
+func connectToDatabase() *sql.DB {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
 
 	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		panic(err)
-	}
+	handleError(err)
 
-	result, err := db.Exec("create table if not exists $1;", "measurement") // TODO: Use correct Postgres syntax!
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("%s\n", result)
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+	handleError(err)
 
-	// defer db.Close()
-	err = db.Close()
-	if err != nil {
-		panic(err)
-	}
+	_, err = db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+		id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
+		measured_at TIMESTAMP WITH TIME ZONE NOT NULL,
+		server TEXT,
+		latency_ms FLOAT,
+		download_mbps FLOAT,
+		upload_mpbs FLOAT,
+		packet_loss_percent FLOAT
+	)`, tableName))
+	handleError(err)
+
+	_, err = db.Exec(fmt.Sprintf("CREATE INDEX IF NOT EXISTS measured_at_idx ON %s (measured_at)", tableName))
+	handleError(err)
+
+	return db
 }
 
 // returns server, latency, download, upload, and packet loss from the given speedtest output string
-func parse_speedtest_result(out string) (string, float32, float32, float32, float32) {
+func parseSpeedtestResult(out string) (string, float32, float32, float32, float32) {
 	// Output is like (without the line numbers):
 	//  0:
 	//  1: Speedtest by Ookla
@@ -74,10 +92,26 @@ func parse_speedtest_result(out string) (string, float32, float32, float32, floa
 	//  9:  Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 	// 10:
 	outLines := strings.Split(out, "\n")
+	// TODO: Make the parsing more robust ...
 	server := strings.TrimSpace(strings.TrimLeft(outLines[3], "Server: "))
 	latency, _ := strconv.ParseFloat(strings.TrimSpace(outLines[5][strings.Index(outLines[5], ":")+1:strings.Index(outLines[5], "ms")]), 32)
 	download, _ := strconv.ParseFloat(strings.TrimSpace(outLines[6][strings.Index(outLines[6], ":")+1:strings.Index(outLines[6], "Mbps")]), 32)
 	upload, _ := strconv.ParseFloat(strings.TrimSpace(outLines[7][strings.Index(outLines[7], ":")+1:strings.Index(outLines[7], "Mbps")]), 32)
 	packetLoss, _ := strconv.ParseFloat(strings.TrimSpace(outLines[8][strings.Index(outLines[8], ":")+1:strings.Index(outLines[8], "%")]), 32)
 	return server, float32(latency), float32(download), float32(upload), float32(packetLoss)
+}
+
+func writeToDatabase(db *sql.DB, measuredAt time.Time, server string, latency float32, download float32, upload float32, packetLoss float32) {
+	// _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s
+	// (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
+	// 'VALUES (%s, %s, %f, %f, %f, %f)`, tableName, measuredAt, server, latency, download, upload, packetLoss))
+	_, err := db.Exec("INSERT INTO $1 (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent) VALUES ($2, $3, $4, $5, $6, $7)", tableName, measuredAt, server, latency, download, upload, packetLoss)
+	// TODO: That does not work yet :( Fix this!
+	handleError(err)
+}
+
+func handleError(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
