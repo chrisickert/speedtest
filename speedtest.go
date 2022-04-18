@@ -10,9 +10,14 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const speedtestExecutable = "speedtest"
+const externalSpeedTestExecutable = "speedtest"
+
+func externalSpeedTestParams() []string {
+	return []string{"-p", "no"}
+}
 
 const (
+	// TODO: Make this configurable (and don't put sensitive data to GitHub)
 	host      = "localhost"
 	port      = 5432
 	user      = "speedtest"
@@ -26,7 +31,7 @@ func main() {
 
 	measuredAt := time.Now()
 
-	// speedtestCmd := exec.Command(speedtestExecutable, "-p", "no")
+	// speedtestCmd := exec.Command(externalSpeedTestExecutable, externalSpeedTestParams()...)
 	// out, err := speedtestCmd.CombinedOutput()
 	// if err != nil {
 	// 	log.Fatal(err)
@@ -93,7 +98,7 @@ func parseSpeedtestResult(out string) (string, float32, float32, float32, float3
 	// 10:
 	outLines := strings.Split(out, "\n")
 	// TODO: Make the parsing more robust ...
-	server := strings.TrimSpace(strings.TrimLeft(outLines[3], "Server: "))
+	server := strings.TrimSpace(outLines[3][strings.Index(outLines[3], ":")+1:])
 	latency, _ := strconv.ParseFloat(strings.TrimSpace(outLines[5][strings.Index(outLines[5], ":")+1:strings.Index(outLines[5], "ms")]), 32)
 	download, _ := strconv.ParseFloat(strings.TrimSpace(outLines[6][strings.Index(outLines[6], ":")+1:strings.Index(outLines[6], "Mbps")]), 32)
 	upload, _ := strconv.ParseFloat(strings.TrimSpace(outLines[7][strings.Index(outLines[7], ":")+1:strings.Index(outLines[7], "Mbps")]), 32)
@@ -102,11 +107,8 @@ func parseSpeedtestResult(out string) (string, float32, float32, float32, float3
 }
 
 func writeToDatabase(db *sql.DB, measuredAt time.Time, server string, latency float32, download float32, upload float32, packetLoss float32) {
-	// _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s
-	// (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
-	// 'VALUES (%s, %s, %f, %f, %f, %f)`, tableName, measuredAt, server, latency, download, upload, packetLoss))
-	_, err := db.Exec("INSERT INTO $1 (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent) VALUES ($2, $3, $4, $5, $6, $7)", tableName, measuredAt, server, latency, download, upload, packetLoss)
-	// TODO: That does not work yet :( Fix this!
+	_, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
+	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), measuredAt, server, latency, download, upload, packetLoss)
 	handleError(err)
 }
 
