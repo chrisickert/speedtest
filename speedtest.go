@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -28,30 +29,13 @@ const (
 
 func main() {
 	db := connectToDatabase()
-
 	measuredAt := time.Now()
-
-	// speedtestCmd := exec.Command(externalSpeedTestExecutable, externalSpeedTestParams()...)
-	// out, err := speedtestCmd.CombinedOutput()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	out := `
-Speedtest by Ookla
-
-  Server: TWL-KOM - Ludwigshafen (id = 10291)
-	 ISP: Vodafone Germany Cable
- Latency:    12.42 ms   (2.62 ms jitter)
-Download:   103.41 Mbps (data used: 99.3 MB )
-  Upload:     9.41 Mbps (data used: 4.7 MB )
-Packet Loss:     0.0%
-Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
-`
-	server, latency, download, upload, packetLoss := parseSpeedtestResult(out)
-
+	speedtestCmd := exec.Command(externalSpeedTestExecutable, externalSpeedTestParams()...)
+	out, err := speedtestCmd.CombinedOutput()
+	handleError(err)
+	server, latency, download, upload, packetLoss := parseSpeedtestResult(string(out))
 	writeToDatabase(db, measuredAt, server, latency, download, upload, packetLoss)
-
-	err := db.Close()
+	err = db.Close()
 	handleError(err)
 }
 
