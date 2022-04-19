@@ -27,16 +27,28 @@ const (
 	tableName = "measurement"
 )
 
+const (
+	nilFloat  = float32(-1.0)
+	nilString = "nil"
+)
+
+type measurement struct {
+	server     string
+	latency    float32
+	download   float32
+	upload     float32
+	packetLoss float32
+}
+
 func main() {
 	db := connectToDatabase()
 	measuredAt := time.Now()
 	speedtestCmd := exec.Command(externalSpeedTestExecutable, externalSpeedTestParams()...)
 	out, err := speedtestCmd.CombinedOutput()
-	handleError(err)
-	server, latency, download, upload, packetLoss := parseSpeedtestResult(string(out))
-	writeToDatabase(db, measuredAt, server, latency, download, upload, packetLoss)
-	err = db.Close()
-	handleError(err)
+	panicOnError(err)
+	measurement := parseSpeedtestResult(string(out))
+	writeToDatabase(db, measuredAt, measurement.server, measurement.latency, measurement.download, measurement.upload, measurement.packetLoss)
+	db.Close()
 }
 
 // connects to the database and creates the measurement table if it does not exist yet
@@ -44,10 +56,10 @@ func connectToDatabase() *sql.DB {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
 
 	db, err := sql.Open("postgres", psqlInfo)
-	handleError(err)
+	panicOnError(err)
 
 	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-	handleError(err)
+	panicOnError(err)
 
 	_, err = db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -58,17 +70,17 @@ func connectToDatabase() *sql.DB {
 		upload_mpbs FLOAT,
 		packet_loss_percent FLOAT
 	)`, tableName))
-	handleError(err)
+	panicOnError(err)
 
 	_, err = db.Exec(fmt.Sprintf("CREATE INDEX IF NOT EXISTS measured_at_idx ON %s (measured_at)", tableName))
-	handleError(err)
+	panicOnError(err)
 
 	return db
 }
 
 // returns server, latency, download, upload, and packet loss from the given speedtest output string
-func parseSpeedtestResult(out string) (string, float32, float32, float32, float32) {
-	// Output is like (without the line numbers):
+func parseSpeedtestResult(out string) *measurement {
+	// Expected output is like (without the line numbers):
 	//  0:
 	//  1: Speedtest by Ookla
 	//  2:
@@ -87,16 +99,16 @@ func parseSpeedtestResult(out string) (string, float32, float32, float32, float3
 	download, _ := strconv.ParseFloat(strings.TrimSpace(outLines[6][strings.Index(outLines[6], ":")+1:strings.Index(outLines[6], "Mbps")]), 32)
 	upload, _ := strconv.ParseFloat(strings.TrimSpace(outLines[7][strings.Index(outLines[7], ":")+1:strings.Index(outLines[7], "Mbps")]), 32)
 	packetLoss, _ := strconv.ParseFloat(strings.TrimSpace(outLines[8][strings.Index(outLines[8], ":")+1:strings.Index(outLines[8], "%")]), 32)
-	return server, float32(latency), float32(download), float32(upload), float32(packetLoss)
+	return &measurement{server, float32(latency), float32(download), float32(upload), float32(packetLoss)}
 }
 
 func writeToDatabase(db *sql.DB, measuredAt time.Time, server string, latency float32, download float32, upload float32, packetLoss float32) {
 	_, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
 	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), measuredAt, server, latency, download, upload, packetLoss)
-	handleError(err)
+	panicOnError(err)
 }
 
-func handleError(err error) {
+func panicOnError(err error) {
 	if err != nil {
 		panic(err)
 	}
