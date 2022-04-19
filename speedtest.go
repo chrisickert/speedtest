@@ -78,6 +78,34 @@ func connectToDatabase() *sql.DB {
 	return db
 }
 
+func substringOrNil(input string, startSubstr string, endSubstr string) string {
+	startIndex := strings.Index(input, startSubstr)
+	if startIndex == -1 {
+		return nilString
+	}
+
+	var endIndex int
+	if endSubstr == nilString {
+		endIndex = -1
+	} else {
+		endIndex = strings.Index(input, endSubstr)
+	}
+
+	if endIndex != -1 {
+		return strings.TrimSpace(input[startIndex+1 : endIndex])
+	} else {
+		return strings.TrimSpace(input[startIndex+1:])
+	}
+}
+
+func float32OrNil(input string) float32 {
+	result, err := strconv.ParseFloat(input, 32)
+	if err != nil {
+		return nilFloat
+	}
+	return float32(result)
+}
+
 // returns server, latency, download, upload, and packet loss from the given speedtest output string
 func parseSpeedtestResult(out string) *measurement {
 	// Expected output is like (without the line numbers):
@@ -93,12 +121,24 @@ func parseSpeedtestResult(out string) *measurement {
 	//  9:  Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 	// 10:
 	outLines := strings.Split(out, "\n")
-	// TODO: Make the parsing more robust ...
-	server := strings.TrimSpace(outLines[3][strings.Index(outLines[3], ":")+1:])
-	latency, _ := strconv.ParseFloat(strings.TrimSpace(outLines[5][strings.Index(outLines[5], ":")+1:strings.Index(outLines[5], "ms")]), 32)
-	download, _ := strconv.ParseFloat(strings.TrimSpace(outLines[6][strings.Index(outLines[6], ":")+1:strings.Index(outLines[6], "Mbps")]), 32)
-	upload, _ := strconv.ParseFloat(strings.TrimSpace(outLines[7][strings.Index(outLines[7], ":")+1:strings.Index(outLines[7], "Mbps")]), 32)
-	packetLoss, _ := strconv.ParseFloat(strings.TrimSpace(outLines[8][strings.Index(outLines[8], ":")+1:strings.Index(outLines[8], "%")]), 32)
+	server, latency, download, upload, packetLoss := nilString, nilFloat, nilFloat, nilFloat, nilFloat
+
+	if len(outLines) > 3 {
+		server = substringOrNil(outLines[3], ":", nilString)
+	}
+	if len(outLines) > 5 {
+		latency = float32OrNil(substringOrNil(outLines[5], ":", "ms"))
+	}
+	if len(outLines) > 6 {
+		download = float32OrNil(substringOrNil(outLines[6], ":", "Mbps"))
+	}
+	if len(outLines) > 7 {
+		upload = float32OrNil(substringOrNil(outLines[7], ":", "Mbps"))
+	}
+	if len(outLines) > 8 {
+		packetLoss = float32OrNil(substringOrNil(outLines[8], ":", "%"))
+	}
+
 	return &measurement{server, float32(latency), float32(download), float32(upload), float32(packetLoss)}
 }
 
