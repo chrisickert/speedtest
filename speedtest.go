@@ -27,17 +27,12 @@ const (
 	tableName = "measurement"
 )
 
-const (
-	nilFloat  = float32(-1.0)
-	nilString = "nil"
-)
-
 type measurement struct {
-	server     string
-	latency    float32
-	download   float32
-	upload     float32
-	packetLoss float32
+	server     *string
+	latency    *float32
+	download   *float32
+	upload     *float32
+	packetLoss *float32
 }
 
 func main() {
@@ -47,7 +42,7 @@ func main() {
 	out, err := speedtestCmd.CombinedOutput()
 	panicOnError(err)
 	measurement := parseSpeedtestResult(string(out))
-	writeToDatabase(db, measuredAt, measurement.server, measurement.latency, measurement.download, measurement.upload, measurement.packetLoss)
+	writeToDatabase(db, measuredAt, &measurement)
 	db.Close()
 }
 
@@ -78,36 +73,7 @@ func connectToDatabase() *sql.DB {
 	return db
 }
 
-func substringOrNil(input string, startSubstr string, endSubstr string) string {
-	startIndex := strings.Index(input, startSubstr)
-	if startIndex == -1 {
-		return nilString
-	}
-
-	var endIndex int
-	if endSubstr == nilString {
-		endIndex = -1
-	} else {
-		endIndex = strings.Index(input, endSubstr)
-	}
-
-	if endIndex != -1 {
-		return strings.TrimSpace(input[startIndex+1 : endIndex])
-	} else {
-		return strings.TrimSpace(input[startIndex+1:])
-	}
-}
-
-func float32OrNil(input string) float32 {
-	result, err := strconv.ParseFloat(input, 32)
-	if err != nil {
-		return nilFloat
-	}
-	return float32(result)
-}
-
-// returns server, latency, download, upload, and packet loss from the given speedtest output string
-func parseSpeedtestResult(out string) *measurement {
+func parseSpeedtestResult(out string) measurement {
 	// Expected output is like (without the line numbers):
 	//  0:
 	//  1: Speedtest by Ookla
@@ -121,30 +87,36 @@ func parseSpeedtestResult(out string) *measurement {
 	//  9:  Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 	// 10:
 	outLines := strings.Split(out, "\n")
-	server, latency, download, upload, packetLoss := nilString, nilFloat, nilFloat, nilFloat, nilFloat
+	var server *string = nil
+	var latency, download, upload, packetLoss *float32 = nil, nil, nil, nil
 
 	if len(outLines) > 3 {
-		server = substringOrNil(outLines[3], ":", nilString)
+		startSubstr := ":"
+		server = substringOrNil(&outLines[3], &startSubstr, nil)
 	}
 	if len(outLines) > 5 {
-		latency = float32OrNil(substringOrNil(outLines[5], ":", "ms"))
+		startSubstr, endSubstr := ":", "ms"
+		latency = float32OrNil(substringOrNil(&outLines[5], &startSubstr, &endSubstr))
 	}
 	if len(outLines) > 6 {
-		download = float32OrNil(substringOrNil(outLines[6], ":", "Mbps"))
+		startSubstr, endSubstr := ":", "Mbps"
+		download = float32OrNil(substringOrNil(&outLines[6], &startSubstr, &endSubstr))
 	}
 	if len(outLines) > 7 {
-		upload = float32OrNil(substringOrNil(outLines[7], ":", "Mbps"))
+		startSubstr, endSubstr := ":", "Mbps"
+		upload = float32OrNil(substringOrNil(&outLines[7], &startSubstr, &endSubstr))
 	}
 	if len(outLines) > 8 {
-		packetLoss = float32OrNil(substringOrNil(outLines[8], ":", "%"))
+		startSubstr, endSubstr := ":", "%"
+		packetLoss = float32OrNil(substringOrNil(&outLines[8], &startSubstr, &endSubstr))
 	}
 
-	return &measurement{server, float32(latency), float32(download), float32(upload), float32(packetLoss)}
+	return measurement{server, latency, download, upload, packetLoss}
 }
 
-func writeToDatabase(db *sql.DB, measuredAt time.Time, server string, latency float32, download float32, upload float32, packetLoss float32) {
+func writeToDatabase(db *sql.DB, measuredAt time.Time, m *measurement) {
 	_, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
-	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), measuredAt, server, latency, download, upload, packetLoss)
+	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), measuredAt, *(m.server), *(m.latency), *(m.download), *(m.upload), *(m.packetLoss))
 	panicOnError(err)
 }
 
@@ -152,4 +124,35 @@ func panicOnError(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func substringOrNil(input *string, startSubstr *string, endSubstr *string) *string {
+	startIndex := strings.Index(*input, *startSubstr)
+	if startIndex == -1 {
+		return nil
+	}
+
+	var endIndex int
+	if endSubstr == nil {
+		endIndex = -1
+	} else {
+		endIndex = strings.Index(*input, *endSubstr)
+	}
+
+	if endIndex != -1 {
+		result := strings.TrimSpace((*input)[startIndex+1 : endIndex])
+		return &result
+	} else {
+		result := strings.TrimSpace((*input)[startIndex+1:])
+		return &result
+	}
+}
+
+func float32OrNil(input *string) *float32 {
+	result, err := strconv.ParseFloat(*input, 32)
+	if err != nil {
+		return nil
+	}
+	resultFloat32 := float32(result)
+	return &resultFloat32
 }
