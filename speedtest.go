@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -28,11 +30,16 @@ const (
 )
 
 type measurement struct {
-	server     *string
-	latency    *float32
-	download   *float32
-	upload     *float32
-	packetLoss *float32
+	server          string
+	serverError     error
+	latency         float64
+	latencyError    error
+	download        float64
+	downloadError   error
+	upload          float64
+	uploadError     error
+	packetLoss      float64
+	packetLossError error
 }
 
 func main() {
@@ -42,7 +49,7 @@ func main() {
 	out, err := speedtestCmd.CombinedOutput()
 	panicOnError(err)
 	measurement := parseSpeedtestResult(string(out))
-	writeToDatabase(db, measuredAt, &measurement)
+	writeToDatabase(db, measuredAt, measurement)
 	db.Close()
 }
 
@@ -73,7 +80,7 @@ func connectToDatabase() *sql.DB {
 	return db
 }
 
-func parseSpeedtestResult(out string) measurement {
+func parseSpeedtestResult(out string) *measurement {
 	// Expected output is like (without the line numbers):
 	//  0:
 	//  1: Speedtest by Ookla
@@ -87,36 +94,65 @@ func parseSpeedtestResult(out string) measurement {
 	//  9:  Result URL: https://www.speedtest.net/result/c/8f37ffd1-121d-48cf-808f-dd0d11e0336f
 	// 10:
 	outLines := strings.Split(out, "\n")
-	var server *string = nil
-	var latency, download, upload, packetLoss *float32 = nil, nil, nil, nil
+	var m measurement
 
 	if len(outLines) > 3 {
-		startSubstr := ":"
-		server = substringOrNil(&outLines[3], &startSubstr, nil)
-	}
-	if len(outLines) > 5 {
-		startSubstr, endSubstr := ":", "ms"
-		latency = float32OrNil(substringOrNil(&outLines[5], &startSubstr, &endSubstr))
-	}
-	if len(outLines) > 6 {
-		startSubstr, endSubstr := ":", "Mbps"
-		download = float32OrNil(substringOrNil(&outLines[6], &startSubstr, &endSubstr))
-	}
-	if len(outLines) > 7 {
-		startSubstr, endSubstr := ":", "Mbps"
-		upload = float32OrNil(substringOrNil(&outLines[7], &startSubstr, &endSubstr))
-	}
-	if len(outLines) > 8 {
-		startSubstr, endSubstr := ":", "%"
-		packetLoss = float32OrNil(substringOrNil(&outLines[8], &startSubstr, &endSubstr))
+		m.server, m.serverError = substring(outLines[3], ":")
+	} else {
+		m.serverError = errors.New("no server detected")
 	}
 
-	return measurement{server, latency, download, upload, packetLoss}
+	if len(outLines) > 5 {
+		latencyString, err := substring(outLines[5], ":", "ms")
+		if err != nil {
+			m.latencyError = err
+		} else {
+			m.latency, m.latencyError = strconv.ParseFloat(latencyString, 32)
+		}
+	} else {
+		m.latencyError = errors.New("no latency detected")
+	}
+
+	if len(outLines) > 6 {
+		downloadString, err := substring(outLines[6], ":", "Mbps")
+		if err != nil {
+			m.downloadError = err
+		} else {
+			m.download, m.downloadError = strconv.ParseFloat(downloadString, 32)
+		}
+	} else {
+		m.downloadError = errors.New(("no download speed detected"))
+	}
+
+	if len(outLines) > 7 {
+		uploadString, err := substring(outLines[7], ":", "Mbps")
+		if err != nil {
+			m.uploadError = err
+		} else {
+			m.upload, m.uploadError = strconv.ParseFloat(uploadString, 32)
+		}
+	} else {
+		m.uploadError = errors.New("no upload speed detected")
+	}
+
+	if len(outLines) > 8 {
+		packetLossString, err := substring(outLines[8], ":", "%")
+		if err != nil {
+			m.packetLossError = err
+		} else {
+			m.packetLoss, m.packetLossError = strconv.ParseFloat(packetLossString, 32)
+		}
+	} else {
+		m.packetLossError = errors.New("no packet loss detected")
+	}
+
+	return &m
 }
 
 func writeToDatabase(db *sql.DB, measuredAt time.Time, m *measurement) {
+	// TODO: In a transaction do 1) insert new row with only id and measured_at 2) update with measurement values one by one
 	_, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (measured_at, server, latency_ms, download_mbps, upload_mpbs, packet_loss_percent)
-	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), measuredAt, *(m.server), *(m.latency), *(m.download), *(m.upload), *(m.packetLoss))
+	VALUES ($1, $2, $3, $4, $5, $6)`, tableName), pgValues(measuredAt, m)...)
 	panicOnError(err)
 }
 
@@ -126,33 +162,54 @@ func panicOnError(err error) {
 	}
 }
 
-func substringOrNil(input *string, startSubstr *string, endSubstr *string) *string {
-	startIndex := strings.Index(*input, *startSubstr)
+func substring(input string, separators ...string) (string, error) {
+	if len(separators) != 1 && len(separators) != 2 {
+		return "", errors.New("illegal number of separators (either one or two separators are supported)")
+	}
+
+	startIndex := strings.Index(input, separators[0])
 	if startIndex == -1 {
-		return nil
+		return "", fmt.Errorf("there is no sequence %s in input %s", separators[0], input)
 	}
 
 	var endIndex int
-	if endSubstr == nil {
+	if len(separators) == 1 {
 		endIndex = -1
 	} else {
-		endIndex = strings.Index(*input, *endSubstr)
+		endIndex = strings.Index(input, separators[1])
 	}
 
 	if endIndex != -1 {
-		result := strings.TrimSpace((*input)[startIndex+1 : endIndex])
-		return &result
+		return strings.TrimSpace(input[startIndex+1 : endIndex]), nil
 	} else {
-		result := strings.TrimSpace((*input)[startIndex+1:])
-		return &result
+		return strings.TrimSpace(input[startIndex+1:]), nil
 	}
 }
 
-func float32OrNil(input *string) *float32 {
-	result, err := strconv.ParseFloat(*input, 32)
-	if err != nil {
-		return nil
+func pgValues(measuredAt time.Time, m *measurement) []any {
+	var result [6]any
+	result[0] = measuredAt
+
+	fieldMap := map[int]string{
+		1: "server",
+		2: "latency",
+		3: "download",
+		4: "upload",
+		5: "packetLoss",
 	}
-	resultFloat32 := float32(result)
-	return &resultFloat32
+
+	r := reflect.ValueOf(m)
+	for index, name := range fieldMap {
+		if reflect.Indirect(r).FieldByName(name + "Error").IsNil() {
+			field := reflect.Indirect(r).FieldByName(name)
+			if field.CanFloat() {
+				result[index] = float32(field.Float())
+			} else {
+				result[index] = field.String()
+			}
+		} else {
+			result[index] = nil
+		}
+	}
+	return result[:]
 }
