@@ -45,12 +45,26 @@ type measurement struct {
 func main() {
 	db := connectToDatabase()
 	measuredAt := time.Now()
+	m := doMeasure(measuredAt)
+	writeToDatabase(db, measuredAt, m)
+	db.Close()
+}
+
+func doMeasure(measuredAt time.Time) *measurement {
 	speedtestCmd := exec.Command(externalSpeedTestExecutable, externalSpeedTestParams()...)
 	out, err := speedtestCmd.CombinedOutput()
-	panicOnError(err)
-	measurement := parseSpeedtestResult(string(out))
-	writeToDatabase(db, measuredAt, measurement)
-	db.Close()
+	if err != nil {
+		e := errors.New("execution of speedtest failed")
+		return &measurement{
+			serverError:     e,
+			latencyError:    e,
+			downloadError:   e,
+			uploadError:     e,
+			packetLossError: e,
+		}
+	} else {
+		return parseSpeedtestResult(string(out))
+	}
 }
 
 // connects to the database and creates the measurement table if it does not exist yet
